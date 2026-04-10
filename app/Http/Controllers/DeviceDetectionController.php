@@ -3,11 +3,18 @@
 namespace App\Http\Controllers;
 
 use App\Models\DeviceData;
+use Detection\MobileDetect;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
 class DeviceDetectionController extends Controller
 {
+    protected $mobileDetect;
+
+    public function __construct()
+    {
+        $this->mobileDetect = new MobileDetect();
+    }
     /**
      * Detect and store comprehensive device information
      */
@@ -266,10 +273,14 @@ class DeviceDetectionController extends Controller
     }
 
     /**
-     * Parse device type and manufacturer information
+     * Parse device type and manufacturer information using Mobile_Detect
      */
     private function parseDeviceInfo(string $userAgent, array $clientHints): array
     {
+        $detect = $this->mobileDetect;
+        $detect->setUserAgent($userAgent);
+        $detect->setHttpHeaders(collect($clientHints)->filter()->map(function ($v) { return trim($v, '"'); })->toArray());
+        
         $deviceType = 'Desktop';
         $deviceBrand = 'Unknown';
         $deviceModel = 'Unknown';
@@ -278,49 +289,38 @@ class DeviceDetectionController extends Controller
         $isDesktop = true;
         $isBot = false;
         
-        // Check Client Hints
-        if (!empty($clientHints['mobile'])) {
-            $isMobile = $clientHints['mobile'] === '?1';
-            $isDesktop = !$isMobile;
+        // Use Mobile_Detect for accurate detection
+        if ($detect->isMobile()) {
+            $isMobile = true;
+            $isDesktop = false;
+            $deviceType = 'Mobile';
         }
         
-        if (!empty($clientHints['model'])) {
+        if ($detect->isTablet()) {
+            $isTablet = true;
+            $isMobile = false;
+            $isDesktop = false;
+            $deviceType = 'Tablet';
+        }
+        
+        if (!$isMobile && !$isTablet) {
+            $deviceType = 'Desktop';
+            $isDesktop = true;
+        }
+        
+        // Get device brand and model using Mobile_Detect
+        if ($detect->isMobile() || $detect->isTablet()) {
+            // Try to get brand from known patterns
+            $deviceBrand = $this->detectDeviceBrand($userAgent);
+            $deviceModel = $this->detectDeviceModel($userAgent, $deviceBrand);
+        }
+        
+        // Check Client Hints for model
+        if (!empty($clientHints['model']) && $deviceModel === 'Unknown') {
             $deviceModel = trim($clientHints['model'], '"');
-            $deviceBrand = $this->extractBrandFromModel($deviceModel);
-        }
-        
-        // Parse User-Agent for device type
-        if (preg_match('/Mobile|Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i', $userAgent)) {
-            if (preg_match('/iPad|Tablet/i', $userAgent)) {
-                $deviceType = 'Tablet';
-                $isTablet = true;
-                $isMobile = false;
-                $isDesktop = false;
-            } else {
-                $deviceType = 'Mobile';
-                $isMobile = true;
-                $isTablet = false;
-                $isDesktop = false;
+            if ($deviceBrand === 'Unknown') {
+                $deviceBrand = $this->extractBrandFromModel($deviceModel);
             }
-        }
-        
-        // Detect specific brands
-        if (preg_match('/Samsung|SM-|GT-/i', $userAgent)) {
-            $deviceBrand = 'Samsung';
-        } elseif (preg_match('/iPhone/i', $userAgent)) {
-            $deviceBrand = 'Apple';
-            $deviceModel = 'iPhone';
-        } elseif (preg_match('/iPad/i', $userAgent)) {
-            $deviceBrand = 'Apple';
-            $deviceModel = 'iPad';
-        } elseif (preg_match('/Huawei/i', $userAgent)) {
-            $deviceBrand = 'Huawei';
-        } elseif (preg_match('/Xiaomi|MI\s|Redmi/i', $userAgent)) {
-            $deviceBrand = 'Xiaomi';
-        } elseif (preg_match('/OnePlus/i', $userAgent)) {
-            $deviceBrand = 'OnePlus';
-        } elseif (preg_match('/Google|Pixel/i', $userAgent)) {
-            $deviceBrand = 'Google';
         }
         
         // Detect bots
@@ -338,6 +338,174 @@ class DeviceDetectionController extends Controller
             'is_desktop' => $isDesktop,
             'is_bot' => $isBot,
         ];
+    }
+
+    /**
+     * Detect device brand from User-Agent using Mobile_Detect patterns
+     */
+    private function detectDeviceBrand(string $userAgent): string
+    {
+        $detect = $this->mobileDetect;
+        $detect->setUserAgent($userAgent);
+        
+        // Mobile_Detect has built-in brand detection
+        $brands = [
+            'Samsung' => 'Samsung',
+            'Apple' => 'Apple',
+            'Huawei' => 'Huawei',
+            'Xiaomi' => 'Xiaomi',
+            'OnePlus' => 'OnePlus',
+            'Google' => 'Google',
+            'LG' => 'LG',
+            'Sony' => 'Sony',
+            'Motorola' => 'Motorola',
+            'Nokia' => 'Nokia',
+            'HTC' => 'HTC',
+            'Oppo' => 'Oppo',
+            'Vivo' => 'Vivo',
+            'Realme' => 'Realme',
+            'Lenovo' => 'Lenovo',
+            'Asus' => 'Asus',
+            'ZTE' => 'ZTE',
+            'BlackBerry' => 'BlackBerry',
+            'Alcatel' => 'Alcatel',
+        ];
+        
+        foreach ($brands as $brand => $name) {
+            if ($detect->is($brand)) {
+                return $name;
+            }
+        }
+        
+        // Fallback to regex
+        if (preg_match('/Samsung|SM-|GT-/i', $userAgent)) return 'Samsung';
+        if (preg_match('/iPhone|iPad|iPod/i', $userAgent)) return 'Apple';
+        if (preg_match('/Huawei|HW-/i', $userAgent)) return 'Huawei';
+        if (preg_match('/Xiaomi|MI\s|Redmi/i', $userAgent)) return 'Xiaomi';
+        if (preg_match('/OnePlus/i', $userAgent)) return 'OnePlus';
+        if (preg_match('/Pixel/i', $userAgent)) return 'Google';
+        if (preg_match('/LG[\s-]/i', $userAgent)) return 'LG';
+        if (preg_match('/Sony/i', $userAgent)) return 'Sony';
+        if (preg_match('/Motorola|Moto[\s-]/i', $userAgent)) return 'Motorola';
+        if (preg_match('/Nokia/i', $userAgent)) return 'Nokia';
+        if (preg_match('/OPPO/i', $userAgent)) return 'Oppo';
+        if (preg_match('/vivo/i', $userAgent)) return 'Vivo';
+        if (preg_match('/Realme/i', $userAgent)) return 'Realme';
+        if (preg_match('/Lenovo/i', $userAgent)) return 'Lenovo';
+        if (preg_match('/Asus/i', $userAgent)) return 'Asus';
+        if (preg_match('/ZTE/i', $userAgent)) return 'ZTE';
+        if (preg_match('/BlackBerry/i', $userAgent)) return 'BlackBerry';
+        
+        return 'Unknown';
+    }
+
+    /**
+     * Detect device model from User-Agent
+     */
+    private function detectDeviceModel(string $userAgent, string $brand): string
+    {
+        $model = 'Unknown';
+        
+        switch ($brand) {
+            case 'Apple':
+                if (preg_match('/iPhone/i', $userAgent)) {
+                    $model = 'iPhone';
+                    // Try to extract specific iPhone model
+                    if (preg_match('/iPhone([\d,]+)/i', $userAgent, $matches)) {
+                        $model .= ' ' . $matches[1];
+                    }
+                } elseif (preg_match('/iPad/i', $userAgent)) {
+                    $model = 'iPad';
+                } elseif (preg_match('/iPod/i', $userAgent)) {
+                    $model = 'iPod Touch';
+                }
+                break;
+                
+            case 'Samsung':
+                if (preg_match('/(SM-[A-Z0-9]+)/i', $userAgent, $matches)) {
+                    $model = $matches[1];
+                } elseif (preg_match('/(GT-[A-Z0-9]+)/i', $userAgent, $matches)) {
+                    $model = $matches[1];
+                }
+                break;
+                
+            case 'Xiaomi':
+                if (preg_match('/(Redmi\s?[A-Z0-9]+|Mi\s?[A-Z0-9]+)/i', $userAgent, $matches)) {
+                    $model = trim($matches[1]);
+                }
+                break;
+                
+            case 'OnePlus':
+                if (preg_match('/(ONEPLUS\s?[A-Z0-9]+)/i', $userAgent, $matches)) {
+                    $model = trim($matches[1]);
+                } elseif (preg_match('/(KB\d+)/i', $userAgent, $matches)) {
+                    $model = 'OnePlus ' . $matches[1];
+                }
+                break;
+                
+            case 'Huawei':
+                if (preg_match('/(HUAWEI\s?[A-Z0-9-]+|HW-[A-Z0-9]+)/i', $userAgent, $matches)) {
+                    $model = trim($matches[1]);
+                }
+                break;
+                
+            case 'Google':
+                if (preg_match('/Pixel\s?([0-9a-z]+)?/i', $userAgent, $matches)) {
+                    $model = 'Pixel' . (isset($matches[1]) ? ' ' . ucfirst($matches[1]) : '');
+                }
+                break;
+                
+            case 'Sony':
+                if (preg_match('/(Xperia\s?[A-Z0-9]+)/i', $userAgent, $matches)) {
+                    $model = $matches[1];
+                }
+                break;
+                
+            case 'Motorola':
+                if (preg_match('/(Moto[\s]?[A-Z0-9]+)/i', $userAgent, $matches)) {
+                    $model = $matches[1];
+                }
+                break;
+                
+            case 'Nokia':
+                if (preg_match('/(Nokia[\s]?[A-Z0-9]+)/i', $userAgent, $matches)) {
+                    $model = $matches[1];
+                }
+                break;
+                
+            case 'LG':
+                if (preg_match('/(LG-[A-Z0-9]+)/i', $userAgent, $matches)) {
+                    $model = $matches[1];
+                }
+                break;
+                
+            case 'Oppo':
+                if (preg_match('/(OPPO[\s]?[A-Z0-9]+)/i', $userAgent, $matches)) {
+                    $model = trim($matches[1]);
+                }
+                break;
+                
+            case 'Vivo':
+                if (preg_match('/(vivo[\s]?[A-Z0-9]+)/i', $userAgent, $matches)) {
+                    $model = trim($matches[1]);
+                }
+                break;
+                
+            case 'Realme':
+                if (preg_match('/(realme[\s]?[A-Z0-9]+)/i', $userAgent, $matches)) {
+                    $model = trim($matches[1]);
+                }
+                break;
+        }
+        
+        // Fallback: try to extract any model pattern
+        if ($model === 'Unknown') {
+            if (preg_match('/;\s*([^;)]+)\s*Build/i', $userAgent, $matches)) {
+                $model = trim($matches[1]);
+            }
+        }
+        
+        return $model;
     }
 
     /**
