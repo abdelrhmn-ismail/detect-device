@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(composer *)",
+      "Bash(robocopy *)"
+    ]
+  },
+  "$version": 3
+}
