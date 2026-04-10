@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(composer *)",
-      "Bash(robocopy *)"
+      "Bash(robocopy *)",
+      "Bash(php *)",
+      "Bash(mkdir *)"
     ]
   },
   "$version": 3
